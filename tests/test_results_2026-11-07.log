@@ -1,0 +1,17 @@
+test_missing_stock_row_is_an_error_not_a_guess (test_compute.TestEdgeCases.test_missing_stock_row_is_an_error_not_a_guess) ... ok
+test_reserved_exceeds_on_hand_floors_at_zero (test_compute.TestEdgeCases.test_reserved_exceeds_on_hand_floors_at_zero) ... ok
+test_ac02_order_and_bom (test_compute.TestGoldenDemoMO001.test_ac02_order_and_bom) ... ok
+test_ac03_required (test_compute.TestGoldenDemoMO001.test_ac03_required) ... ok
+test_ac04_available (test_compute.TestGoldenDemoMO001.test_ac04_available) ... ok
+test_ac05_shortage_and_units (test_compute.TestGoldenDemoMO001.test_ac05_shortage_and_units) ... ok
+test_ac06_draft_pr (test_compute.TestGoldenDemoMO001.test_ac06_draft_pr) ... ok
+test_ac08_unknown_order (test_compute.TestHonestErrors.test_ac08_unknown_order) ... ok
+test_cli_unknown_order_exit_code_2 (test_compute.TestHonestErrors.test_cli_unknown_order_exit_code_2) ... ok
+test_zero_quantity_order (test_compute.TestHonestErrors.test_zero_quantity_order) ... ok
+test_json_csv_consistency (test_compute.TestJsonMatchesCsv.test_json_csv_consistency) ... ok
+test_mo002_no_shortage (test_compute.TestNoShortagePath.test_mo002_no_shortage) ... ok
+
+----------------------------------------------------------------------
+Ran 12 tests in 0.064s
+
+OK
