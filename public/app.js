@@ -1,527 +1,642 @@
 /**
- * PPIC Alter-S — Frontend Application
+ * PPIC Alter-S — chat client
  *
- * Handles chat UI, SSE streaming from the backend, markdown rendering,
- * and structured display of material plans and PR drafts.
+ * Renders streamed agent events. Every number shown here comes from the
+ * server's deterministic engine; the client never computes a quantity.
  */
 
-// ─── DOM Elements ─────────────────────────────────────────────────────────────
-const messagesEl = document.getElementById('messages');
-const inputEl = document.getElementById('messageInput');
-const sendBtn = document.getElementById('sendBtn');
-const statusBadge = document.getElementById('statusBadge');
-const statusText = document.getElementById('statusText');
-const demoDataBtn = document.getElementById('demoDataBtn');
-const sidebar = document.getElementById('sidebar');
-const closeSidebarBtn = document.getElementById('closeSidebarBtn');
-const demoDataContent = document.getElementById('demoDataContent');
+(() => {
+  'use strict';
 
-// ─── State ────────────────────────────────────────────────────────────────────
-let isStreaming = false;
-let currentMessageEl = null;
-let currentContentEl = null;
-let currentTextBuffer = '';
+  // ─── Elements ───────────────────────────────────────────────────────────
+  const messagesEl = document.getElementById('messages');
+  const formEl = document.getElementById('composer');
+  const inputEl = document.getElementById('messageInput');
+  const sendBtn = document.getElementById('sendBtn');
+  const modeBadge = document.getElementById('modeBadge');
+  const modeText = document.getElementById('modeText');
+  const panelEl = document.getElementById('panel');
+  const panelBody = document.getElementById('panelBody');
+  const panelToggle = document.getElementById('panelToggle');
+  const panelClose = document.getElementById('panelClose');
+  const scrim = document.getElementById('scrim');
 
-// ─── Markdown Renderer (lightweight, no dependencies) ─────────────────────────
-function escapeHtml(text) {
-  const div = document.createElement('div');
-  div.textContent = text;
-  return div.innerHTML;
-}
+  const nf = new Intl.NumberFormat('en-US');
+  const fmt = (n) => (typeof n === 'number' ? nf.format(n) : String(n ?? ''));
 
-function renderMarkdown(md) {
-  if (!md) return '';
+  let busy = false;
+  let healthTimer = null;
+  let modeReason = null;
+  let modeNoticeShown = false;
 
-  let html = md;
+  // ─── Icons ──────────────────────────────────────────────────────────────
+  const ICON = {
+    spinner:
+      '<svg class="spin" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4"><path d="M12 3a9 9 0 1 0 9 9" stroke-linecap="round"/></svg>',
+    check:
+      '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.6"><path d="M20 6L9 17l-5-5" stroke-linecap="round" stroke-linejoin="round"/></svg>',
+    alert:
+      '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 9v4M12 17h.01" stroke-linecap="round"/><path d="M10.3 3.9L2.4 18a2 2 0 0 0 1.7 3h15.8a2 2 0 0 0 1.7-3L13.7 3.9a2 2 0 0 0-3.4 0z" stroke-linejoin="round"/></svg>',
+    lock:
+      '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="4" y="10" width="16" height="10" rx="2"/><path d="M8 10V7a4 4 0 0 1 8 0v3" stroke-linecap="round"/></svg>',
+    info:
+      '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="9"/><path d="M12 11v5M12 8h.01" stroke-linecap="round"/></svg>',
+  };
 
-  // Code blocks (```...```)
-  html = html.replace(/```(\w*)\n([\s\S]*?)```/g, (_, lang, code) => {
-    return `<pre><code>${escapeHtml(code.trim())}</code></pre>`;
-  });
+  // ─── Helpers ────────────────────────────────────────────────────────────
+  function esc(value) {
+    return String(value ?? '')
+      .replace(/&/g, '&amp;')
+      .replace(/</g, '&lt;')
+      .replace(/>/g, '&gt;')
+      .replace(/"/g, '&quot;');
+  }
 
-  // Inline code (`code`)
-  html = html.replace(/`([^`]+)`/g, (_, code) => `<code>${escapeHtml(code)}</code>`);
+  /** Minimal, safe markdown: paragraphs, bold, italics, inline code, lists. */
+  function md(source) {
+    let s = esc(source).trim();
+    if (!s) return '';
 
-  // Tables (| col | col |)
-  html = html.replace(/^(\|.+\|)\n(\|[-:\s|]+\|)\n((?:\|.+\|\n?)*)/gm, (match, headerRow, sepRow, bodyRows) => {
-    const headers = headerRow.split('|').filter(c => c.trim()).map(c => c.trim());
-    const rows = bodyRows.trim().split('\n').filter(r => r.trim()).map(r =>
-      r.split('|').filter(c => c.trim()).map(c => c.trim())
-    );
-
-    let tableHtml = '<table><thead><tr>';
-    headers.forEach((h, i) => {
-      const isShortageCol = h.toLowerCase().includes('shortage');
-      tableHtml += `<th>${escapeHtml(h)}</th>`;
+    s = s.replace(/```[a-z]*\n?([\s\S]*?)```/gi, (_, code) => `<pre>${code.trim()}</pre>`);
+    s = s.replace(/`([^`\n]+)`/g, '<code>$1</code>');
+    s = s.replace(/\*\*([^*\n]+)\*\*/g, '<strong>$1</strong>');
+    s = s.replace(/(^|[\s(])\*([^*\n]+)\*(?=[\s.,;:!?)]|$)/g, '$1<em>$2</em>');
+    s = s.replace(/(?:^|\n)((?:[-*] [^\n]*(?:\n|$))+)/g, (_, block) => {
+      const items = block
+        .trim()
+        .split('\n')
+        .map((line) => `<li>${line.replace(/^[-*]\s+/, '')}</li>`)
+        .join('');
+      return `\n<ul>${items}</ul>`;
     });
-    tableHtml += '</tr></thead><tbody>';
 
-    rows.forEach(row => {
-      tableHtml += '<tr>';
-      row.forEach((cell, i) => {
-        const headerLower = headers[i]?.toLowerCase() || '';
-        const isShortageCol = headerLower.includes('shortage');
-        const numVal = parseInt(cell.replace(/,/g, ''), 10);
-        const hasShortage = isShortageCol && !isNaN(numVal) && numVal > 0;
-        const noShortage = isShortageCol && !isNaN(numVal) && numVal === 0;
-        let cls = isShortageCol ? ' class="shortage-cell' : '';
-        if (hasShortage) cls += ' has-shortage';
-        else if (noShortage) cls += ' no-shortage';
-        if (cls) cls += '"';
-        tableHtml += `<td${cls}>${escapeHtml(cell)}</td>`;
+    return s
+      .split(/\n{2,}/)
+      .map((para) => {
+        const p = para.trim();
+        if (!p) return '';
+        if (/^<(pre|ul|ol|blockquote)/.test(p)) return p;
+        return `<p>${p.replace(/\n/g, '<br>')}</p>`;
+      })
+      .join('');
+  }
+
+  function scrollDown(force = false) {
+    const nearBottom =
+      messagesEl.scrollHeight - messagesEl.scrollTop - messagesEl.clientHeight < 160;
+    if (force || nearBottom) {
+      requestAnimationFrame(() => {
+        messagesEl.scrollTop = messagesEl.scrollHeight;
       });
-      tableHtml += '</tr>';
-    });
-    tableHtml += '</tbody></table>';
-    return tableHtml;
-  });
-
-  // Headers
-  html = html.replace(/^### (.+)$/gm, '<h3>$1</h3>');
-  html = html.replace(/^## (.+)$/gm, '<h2>$1</h2>');
-  html = html.replace(/^# (.+)$/gm, '<h1>$1</h1>');
-
-  // Bold (**text**)
-  html = html.replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>');
-
-  // Italic (*text*)
-  html = html.replace(/(?<!\*)\*([^*]+)\*(?!\*)/g, '<em>$1</em>');
-
-  // Unordered lists
-  html = html.replace(/^[-*] (.+)$/gm, '<li>$1</li>');
-  html = html.replace(/(<li>.*<\/li>\n?)+/g, (match) => `<ul>${match}</ul>`);
-
-  // Ordered lists
-  html = html.replace(/^\d+\. (.+)$/gm, '<li>$1</li>');
-
-  // Line breaks (double newline = paragraph, single = <br>)
-  html = html.split(/\n\n+/).map(para => {
-    if (para.startsWith('<') && !para.startsWith('<li>')) return para;
-    return `<p>${para.replace(/\n/g, '<br>')}</p>`;
-  }).join('\n');
-
-  return html;
-}
-
-// ─── Chat Functions ───────────────────────────────────────────────────────────
-function setStatus(status, text) {
-  statusBadge.className = 'status-badge ' + status;
-  statusText.textContent = text;
-}
-
-function addMessage(role, content) {
-  const msgEl = document.createElement('div');
-  msgEl.className = `message message-${role}`;
-
-  const avatar = document.createElement('div');
-  avatar.className = 'message-avatar';
-  avatar.textContent = role === 'user' ? '👤' : '🤖';
-
-  const body = document.createElement('div');
-  body.className = 'message-body';
-
-  const contentEl = document.createElement('div');
-  contentEl.className = 'message-content';
-  contentEl.innerHTML = content;
-
-  body.appendChild(contentEl);
-  msgEl.appendChild(avatar);
-  msgEl.appendChild(body);
-  messagesEl.appendChild(msgEl);
-
-  messagesEl.scrollTop = messagesEl.scrollHeight;
-  return contentEl;
-}
-
-function addUserMessage(text) {
-  addMessage('user', escapeHtml(text));
-}
-
-function startAssistantMessage() {
-  currentTextBuffer = '';
-  const contentEl = addMessage('assistant', '<div class="typing-indicator"><span></span><span></span><span></span></div>');
-  currentContentEl = contentEl;
-  currentMessageEl = contentEl.closest('.message');
-  return contentEl;
-}
-
-function appendTextDelta(text) {
-  if (!currentContentEl) return;
-  // Remove typing indicator if present
-  const typing = currentContentEl.querySelector('.typing-indicator');
-  if (typing) typing.remove();
-
-  currentTextBuffer += text;
-  currentContentEl.innerHTML = renderMarkdown(currentTextBuffer);
-  messagesEl.scrollTop = messagesEl.scrollHeight;
-}
-
-function addToolCall(toolName, input) {
-  if (!currentContentEl) return;
-  const typing = currentContentEl.querySelector('.typing-indicator');
-  if (typing) typing.remove();
-
-  const toolEl = document.createElement('div');
-  toolEl.className = 'tool-call';
-  toolEl.id = `tool-${input?.id || Date.now()}`;
-
-  let detailHtml = '';
-  if (input?.input) {
-    detailHtml = `<div class="tool-call-detail">${escapeHtml(JSON.stringify(input.input, null, 2))}</div>`;
-  }
-
-  toolEl.innerHTML = `
-    <div class="tool-call-header">
-      <span class="tool-icon">🔧</span>
-      <span>Calling tool: </span>
-      <span class="tool-name">${escapeHtml(toolName)}</span>
-    </div>
-    ${detailHtml}
-    <div class="tool-call-result-loading" style="margin-top:6px;font-size:11px;color:var(--neutral-500);">
-      ⏳ Executing...
-    </div>
-  `;
-
-  currentContentEl.appendChild(toolEl);
-  messagesEl.scrollTop = messagesEl.scrollHeight;
-  return toolEl;
-}
-
-function updateToolResult(toolId, result, isError) {
-  const toolEl = document.getElementById(`tool-${toolId}`);
-  if (!toolEl) return;
-
-  const loadingEl = toolEl.querySelector('.tool-call-result-loading');
-  if (loadingEl) loadingEl.remove();
-
-  const resultEl = document.createElement('div');
-  resultEl.className = 'tool-call-result' + (isError ? ' error' : '');
-
-  let resultText = '';
-  if (typeof result === 'object' && result !== null) {
-    // Format the plan result nicely
-    if (result.order && result.lines) {
-      resultText = formatPlanResult(result);
-    } else if (result.pr_draft || result.pr_id) {
-      resultText = formatPRDraft(result);
-    } else {
-      resultText = JSON.stringify(result, null, 2);
     }
-  } else {
-    resultText = String(result);
   }
 
-  const icon = isError ? '❌' : '✅';
-  resultEl.innerHTML = `${icon} <pre style="margin:4px 0 0;white-space:pre-wrap;">${escapeHtml(resultText)}</pre>`;
-  toolEl.appendChild(resultEl);
-  messagesEl.scrollTop = messagesEl.scrollHeight;
-}
+  // ─── Mode badge ─────────────────────────────────────────────────────────
+  function setMode(mode, reason, verified) {
+    if (reason) modeReason = reason;
 
-function formatPlanResult(plan) {
-  const lines = [];
-  lines.push(`Order: ${plan.order.order_id} — ${plan.order.product_name}, ${plan.order.quantity} ${plan.order.unit}`);
-  lines.push('');
-  lines.push('Material | BOM/u | Required | On-hand | Reserved | Available | Shortage');
-  lines.push('---|---|---|---|---|---|---');
-  for (const line of plan.lines) {
-    lines.push(`${line.material_id} (${line.material_name}) | ${line.qty_per_unit} | ${line.required} | ${line.on_hand} | ${line.reserved} | ${line.available} | ${line.shortage}`);
+    const labels = {
+      sdk: verified ? 'Agent ready' : 'Agent connected',
+      offline: 'Deterministic mode',
+      checking: 'Checking agent…',
+    };
+    modeBadge.dataset.mode = mode || 'checking';
+    modeText.textContent = labels[mode] || labels.checking;
+    modeBadge.title =
+      mode === 'offline'
+        ? modeReason || 'No model credential — the deterministic orchestrator is answering.'
+        : mode === 'sdk'
+          ? verified
+            ? 'A CodeBuddy Agent SDK turn completed successfully.'
+            : 'Connected to a CodeBuddy Agent SDK session.'
+          : 'Connecting to the agent…';
   }
-  if (plan.pr_draft) {
-    lines.push('');
-    lines.push(`Draft PR: ${plan.pr_draft.pr_id || 'N/A'} — ${plan.pr_draft.status}`);
-  }
-  return lines.join('\n');
-}
 
-function formatPRDraft(pr) {
-  const lines = [];
-  lines.push(`PR ID: ${pr.pr_id || 'N/A'}`);
-  lines.push(`Status: ${pr.status}`);
-  lines.push(`Order: ${pr.order_id}`);
-  if (pr.lines && pr.lines.length > 0) {
-    lines.push('');
-    lines.push('Lines:');
-    pr.lines.forEach(line => {
-      lines.push(`  - ${line.material_id} (${line.material_name}): ${line.quantity} ${line.unit}`);
-    });
-  }
-  if (pr.note) lines.push(`\nNote: ${pr.note}`);
-  return lines.join('\n');
-}
+  async function checkHealth() {
+    try {
+      const res = await fetch('/api/health', { cache: 'no-store' });
+      const data = await res.json();
+      const mode = data?.agent?.mode;
 
-function finalizeAssistantMessage() {
-  // Remove typing indicator if still present
-  if (currentContentEl) {
-    const typing = currentContentEl.querySelector('.typing-indicator');
-    if (typing) {
-      typing.remove();
-      if (!currentTextBuffer) {
-        currentContentEl.innerHTML = '<p>(No response)</p>';
+      if (mode === 'sdk' || mode === 'offline') {
+        setMode(mode, data.agent.reason, data.agent.verified);
+        if (healthTimer) clearInterval(healthTimer);
+        healthTimer = null;
+        return;
       }
+      setMode('checking');
+    } catch {
+      setMode('checking');
     }
   }
-  currentMessageEl = null;
-  currentContentEl = null;
-  currentTextBuffer = '';
-}
 
-// ─── SSE Streaming ────────────────────────────────────────────────────────────
-async function sendMessage(text) {
-  if (isStreaming || !text.trim()) return;
+  // ─── Message scaffolding ────────────────────────────────────────────────
+  function addUserMessage(text) {
+    const article = document.createElement('article');
+    article.className = 'msg msg-user';
+    article.innerHTML = `<div class="msg-body"><div class="bubble">${esc(text)}</div></div>`;
+    messagesEl.appendChild(article);
+    scrollDown(true);
+  }
 
-  isStreaming = true;
-  sendBtn.disabled = true;
-  setStatus('thinking', 'Thinking...');
+  function startAssistantMessage() {
+    const article = document.createElement('article');
+    article.className = 'msg msg-assistant';
+    article.innerHTML = `
+      <div class="avatar" aria-hidden="true">AS</div>
+      <div class="msg-body">
+        <div class="msg-text">
+          <div class="typing-row">
+            <div class="typing"><span></span><span></span><span></span></div>
+            <span class="typing-label">Working through the order…</span>
+          </div>
+        </div>
+        <div class="msg-cards"></div>
+      </div>`;
+    messagesEl.appendChild(article);
+    scrollDown(true);
 
-  addUserMessage(text);
-  startAssistantMessage();
+    const textEl = article.querySelector('.msg-text');
+    const cardsEl = article.querySelector('.msg-cards');
+    const bodyEl = article.querySelector('.msg-body');
 
-  try {
-    const response = await fetch('/api/chat', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ message: text }),
-    });
+    const ctx = {
+      buffer: '',
+      typing: textEl.querySelector('.typing-row'),
+      traces: new Map(),
 
-    if (!response.ok) {
-      throw new Error(`HTTP ${response.status}`);
-    }
-
-    const reader = response.body.getReader();
-    const decoder = new TextDecoder();
-    let buffer = '';
-
-    while (true) {
-      const { done, value } = await reader.read();
-      if (done) break;
-
-      buffer += decoder.decode(value, { stream: true });
-
-      // Parse SSE events from buffer
-      const events = buffer.split('\n\n');
-      buffer = events.pop(); // Keep incomplete event
-
-      for (const eventStr of events) {
-        if (!eventStr.trim()) continue;
-
-        let eventType = '';
-        let eventData = '';
-
-        for (const line of eventStr.split('\n')) {
-          if (line.startsWith('event: ')) eventType = line.slice(7);
-          else if (line.startsWith('data: ')) eventData = line.slice(6);
+      clearTyping() {
+        if (ctx.typing) {
+          ctx.typing.remove();
+          ctx.typing = null;
         }
+      },
 
-        if (!eventType) continue;
+      setStatus(text) {
+        const label = ctx.typing?.querySelector('.typing-label');
+        if (label && text) label.textContent = text;
+      },
 
-        let data;
-        try { data = JSON.parse(eventData); } catch { data = { raw: eventData }; }
+      appendText(chunk) {
+        ctx.clearTyping();
+        ctx.buffer += chunk;
+        textEl.innerHTML = md(ctx.buffer);
+        scrollDown();
+      },
 
-        handleSSEEvent(eventType, data);
-      }
-    }
-  } catch (err) {
-    console.error('Chat error:', err);
-    if (currentContentEl) {
-      const typing = currentContentEl.querySelector('.typing-indicator');
-      if (typing) typing.remove();
-      currentContentEl.innerHTML += `<p style="color:var(--danger);">⚠️ Error: ${escapeHtml(err.message)}</p>`;
-    }
-    setStatus('error', 'Error');
-  } finally {
-    finalizeAssistantMessage();
-    isStreaming = false;
-    sendBtn.disabled = false;
-    inputEl.focus();
-    setStatus('connected', 'Connected');
-  }
-}
+      addTrace(id, name, input) {
+        ctx.clearTyping();
+        const arg = input?.order_id ? `(${input.order_id})` : '';
+        const el = document.createElement('div');
+        el.className = 'trace';
+        el.dataset.state = 'running';
+        el.dataset.name = name || 'compute_material_plan';
+        el.dataset.arg = arg;
+        el.innerHTML = `${ICON.spinner}<span class="trace-name">${esc(el.dataset.name)}</span><span>${esc(arg)}</span><span class="trace-status">running…</span>`;
+        cardsEl.appendChild(el);
+        ctx.traces.set(id, el);
+        scrollDown();
+      },
 
-function handleSSEEvent(event, data) {
-  switch (event) {
-    case 'status':
-      setStatus('thinking', data.message || 'Processing...');
-      break;
+      updateTrace(id, ok, error) {
+        const el = ctx.traces.get(id);
+        if (!el) return;
+        const { name, arg } = el.dataset;
+        el.dataset.state = ok ? 'ok' : 'error';
+        el.innerHTML = ok
+          ? `${ICON.check}<span class="trace-name">${esc(name)}</span><span>${esc(arg)}</span><span class="trace-status">verified</span>`
+          : `${ICON.alert}<span class="trace-name">${esc(name)}</span><span class="trace-status">${esc(
+              error || 'failed'
+            )}</span>`;
+        scrollDown();
+      },
 
-    case 'text_delta':
-      appendTextDelta(data.text);
-      break;
+      showPlan(plan) {
+        ctx.clearTyping();
+        const pr = plan.pr_draft;
+        // A fully covered order returns a pr_draft shell with no lines and
+        // status NO_PURCHASE_NEEDED. Never render that as a purchase request.
+        const hasDraft = Boolean(pr && Array.isArray(pr.lines) && pr.lines.length > 0);
+        const wrap = document.createElement('div');
+        wrap.innerHTML = planCard(plan) + (hasDraft ? prCard(pr) : '');
+        while (wrap.firstChild) cardsEl.appendChild(wrap.firstChild);
+        scrollDown();
+      },
 
-    case 'tool_start':
-    case 'tool_use':
-      // Only add tool call UI once (tool_start fires first, tool_use has full input)
-      if (event === 'tool_use') {
-        const existing = document.getElementById(`tool-${data.id}`);
-        if (existing) {
-          // Update with full input
-          const detailEl = existing.querySelector('.tool-call-detail');
-          if (detailEl && data.input) {
-            detailEl.textContent = JSON.stringify(data.input, null, 2);
-          }
-        } else {
-          addToolCall(data.name, data);
+      showError(message) {
+        ctx.clearTyping();
+        const el = document.createElement('div');
+        el.className = 'notice notice-error';
+        el.innerHTML = `${ICON.alert}<div>${esc(message)}</div>`;
+        cardsEl.appendChild(el);
+        scrollDown();
+      },
+
+      showNotice(html) {
+        const el = document.createElement('div');
+        el.className = 'notice notice-info';
+        el.innerHTML = `${ICON.info}<div>${html}</div>`;
+        bodyEl.prepend(el);
+      },
+
+      finish() {
+        ctx.clearTyping();
+        // Final render so streamed markdown is always fully applied.
+        if (ctx.buffer) textEl.innerHTML = md(ctx.buffer);
+        if (!ctx.buffer && !cardsEl.children.length) {
+          textEl.innerHTML = '<p class="num-muted">No response was produced.</p>';
         }
-      } else {
-        addToolCall(data.name, { id: data.id });
-      }
-      break;
+      },
+    };
 
-    case 'tool_result':
-      updateToolResult(data.id, data.result, data.is_error);
-      break;
-
-    case 'result':
-      // Turn complete
-      break;
-
-    case 'error':
-      if (currentContentEl) {
-        const typing = currentContentEl.querySelector('.typing-indicator');
-        if (typing) typing.remove();
-        currentContentEl.innerHTML += `<p style="color:var(--danger);">⚠️ ${escapeHtml(data.error)}</p>`;
-      }
-      setStatus('error', 'Error');
-      break;
-
-    case 'done':
-      break;
+    return ctx;
   }
-}
 
-// ─── Demo Data Sidebar ────────────────────────────────────────────────────────
-async function loadDemoData() {
-  try {
-    const res = await fetch('/api/demo-data');
-    const data = await res.json();
+  // ─── Plan card ──────────────────────────────────────────────────────────
+  function planCard(plan) {
+    const { order, lines } = plan;
+    const shortCount = lines.filter((l) => l.shortage > 0).length;
+    const pill =
+      shortCount > 0
+        ? `<span class="pill pill-warn">${shortCount} of ${lines.length} short</span>`
+        : `<span class="pill pill-ok">Fully covered</span>`;
 
-    demoDataContent.innerHTML = '';
+    const due = order.due_date
+      ? new Date(`${order.due_date}T00:00:00`).toLocaleDateString('en-GB', {
+          day: 'numeric',
+          month: 'short',
+          year: 'numeric',
+        })
+      : null;
 
-    // Orders
-    const ordersSection = document.createElement('div');
-    ordersSection.className = 'data-section';
-    ordersSection.innerHTML = '<h3><span class="file-icon">📋</span> Production Orders</h3>';
-    const ordersTable = parseCSV(data.files['orders.csv']);
-    ordersSection.appendChild(renderCSVTable(ordersTable));
-    demoDataContent.appendChild(ordersSection);
+    const meta = [
+      `${fmt(order.quantity)} ${esc(order.unit)}`,
+      due ? `due ${esc(due)}` : null,
+      esc(order.status),
+    ]
+      .filter(Boolean)
+      .join(' · ');
 
-    // BOM
-    const bomSection = document.createElement('div');
-    bomSection.className = 'data-section';
-    bomSection.innerHTML = '<h3><span class="file-icon">🏗️</span> Bill of Materials</h3>';
-    const bomTable = parseCSV(data.files['bom.csv']);
-    bomSection.appendChild(renderCSVTable(bomTable));
-    demoDataContent.appendChild(bomSection);
+    const rows = lines
+      .map((line) => {
+        const hit = line.shortage > 0;
+        return `<tr>
+          <td>
+            <span class="mat-name">${esc(line.material_name)}</span>
+            <span class="mat-id">${esc(line.material_id)}</span>
+          </td>
+          <td class="num-muted">${fmt(line.qty_per_unit)}<span class="unit">${esc(line.unit)}</span></td>
+          <td class="num-strong">${fmt(line.required)}<span class="unit">${esc(line.unit)}</span></td>
+          <td>${fmt(line.on_hand)}</td>
+          <td class="num-muted">${fmt(line.reserved)}</td>
+          <td>${fmt(line.available)}</td>
+          <td class="${hit ? 'shortage-hit' : 'shortage-none'}">${hit ? fmt(line.shortage) : '—'}</td>
+        </tr>`;
+      })
+      .join('');
 
-    // Inventory
-    const invSection = document.createElement('div');
-    invSection.className = 'data-section';
-    invSection.innerHTML = '<h3><span class="file-icon">📦</span> Inventory</h3>';
-    const invTable = parseCSV(data.files['inventory.csv']);
-    invSection.appendChild(renderCSVTable(invTable));
-    demoDataContent.appendChild(invSection);
+    const calc = lines
+      .map(
+        (line) => `<li>
+          <span class="calc-id">${esc(line.material_id)} ${esc(line.material_name)}</span><br>
+          required&nbsp;&nbsp;= ${fmt(line.qty_per_unit)} ${esc(line.unit)}/unit × ${fmt(order.quantity)} = ${fmt(line.required)} ${esc(line.unit)}<br>
+          available&nbsp;= max(${fmt(line.on_hand)} − ${fmt(line.reserved)}, 0) = ${fmt(line.available)} ${esc(line.unit)}<br>
+          shortage&nbsp;&nbsp;= max(${fmt(line.required)} − ${fmt(line.available)}, 0) = ${fmt(line.shortage)} ${esc(line.unit)}
+        </li>`
+      )
+      .join('');
 
-    // Rules
-    const rulesSection = document.createElement('div');
-    rulesSection.className = 'data-section';
-    rulesSection.innerHTML = `
-      <h3><span class="file-icon">📐</span> Calculation Rules</h3>
-      <div style="font-size:12px;color:var(--neutral-600);line-height:1.8;">
-        <code>required = BOM/unit × qty</code><br>
-        <code>available = max(on_hand − reserved, 0)</code><br>
-        <code>shortage = max(required − available, 0)</code>
+    return `<section class="plan-card">
+      <div class="plan-head">
+        <div>
+          <div class="plan-title">
+            <span class="plan-order">${esc(order.order_id)}</span>
+            <span class="plan-product">${esc(order.product_name)}</span>
+          </div>
+          <p class="plan-meta">${meta}</p>
+        </div>
+        ${pill}
       </div>
-    `;
-    demoDataContent.appendChild(rulesSection);
-  } catch (err) {
-    demoDataContent.innerHTML = `<p class="loading-text">Failed to load demo data.</p>`;
+      <div class="table-scroll">
+        <table class="plan-table">
+          <thead>
+            <tr>
+              <th>Material</th>
+              <th>BOM / unit</th>
+              <th>Required</th>
+              <th>On hand</th>
+              <th>Reserved</th>
+              <th>Available</th>
+              <th>Shortage</th>
+            </tr>
+          </thead>
+          <tbody>${rows}</tbody>
+        </table>
+      </div>
+      <div class="plan-foot">
+        <details>
+          <summary>How these numbers were computed</summary>
+          <ul class="calc">${calc}</ul>
+        </details>
+      </div>
+    </section>`;
   }
-}
 
-function parseCSV(text) {
-  const lines = text.trim().split('\n');
-  const headers = lines[0].split(',');
-  const rows = lines.slice(1).map(line => line.split(','));
-  return { headers, rows };
-}
+  // ─── Purchase request draft card ────────────────────────────────────────
+  function prCard(pr) {
+    const lines = (pr.lines || [])
+      .map(
+        (line) => `<li>
+          <span><strong>${esc(line.material_name)}</strong>
+            <span class="mat-id">${esc(line.material_id)}</span></span>
+          <span class="pr-qty">${fmt(line.quantity)} ${esc(line.unit)}</span>
+        </li>`
+      )
+      .join('');
 
-function renderCSVTable({ headers, rows }) {
-  let html = '<table class="data-table"><thead><tr>';
-  headers.forEach(h => html += `<th>${escapeHtml(h)}</th>`);
-  html += '</tr></thead><tbody>';
-  rows.forEach(row => {
-    html += '<tr>';
-    row.forEach(cell => html += `<td>${escapeHtml(cell)}</td>`);
-    html += '</tr>';
-  });
-  html += '</tbody></table>';
-  const div = document.createElement('div');
-  div.innerHTML = html;
-  return div.firstElementChild;
-}
-
-// ─── Event Listeners ──────────────────────────────────────────────────────────
-sendBtn.addEventListener('click', () => {
-  const text = inputEl.value.trim();
-  if (text) {
-    sendMessage(text);
-    inputEl.value = '';
-    autoResize();
+    return `<section class="pr-card">
+      <div class="pr-head">
+        <div>
+          <p class="pr-label">Draft purchase request</p>
+          <div class="pr-id">${esc(pr.pr_id)}</div>
+        </div>
+        <span class="pill pill-pending">${esc(pr.status)}</span>
+      </div>
+      <ul class="pr-lines">${lines}</ul>
+      <div class="pr-foot">
+        ${ICON.lock}
+        <span>Draft only — no purchase order has been created. A planner must approve this request before any PO is issued.</span>
+      </div>
+    </section>`;
   }
-});
 
-inputEl.addEventListener('keydown', (e) => {
-  if (e.key === 'Enter' && !e.shiftKey) {
-    e.preventDefault();
-    sendBtn.click();
-  }
-});
+  // ─── Streaming ──────────────────────────────────────────────────────────
+  async function sendMessage(text) {
+    if (busy || !text.trim()) return;
 
-inputEl.addEventListener('input', autoResize);
+    busy = true;
+    setBusy(true);
+    addUserMessage(text);
 
-function autoResize() {
-  inputEl.style.height = 'auto';
-  inputEl.style.height = Math.min(inputEl.scrollHeight, 120) + 'px';
-  sendBtn.disabled = isStreaming || !inputEl.value.trim();
-}
+    const ctx = startAssistantMessage();
 
-// Suggestion chips
-document.addEventListener('click', (e) => {
-  if (e.target.classList.contains('chip')) {
-    const msg = e.target.dataset.message;
-    inputEl.value = msg;
-    autoResize();
-    sendMessage(msg);
-    inputEl.value = '';
-    autoResize();
-  }
-});
+    try {
+      const res = await fetch('/api/chat', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ message: text }),
+      });
 
-// Sidebar toggle
-demoDataBtn.addEventListener('click', () => {
-  sidebar.classList.toggle('open');
-  if (sidebar.classList.contains('open') && !demoDataContent.querySelector('.data-section')) {
-    loadDemoData();
-  }
-});
+      if (!res.ok || !res.body) {
+        let detail = `HTTP ${res.status}`;
+        try {
+          detail = (await res.json()).error || detail;
+        } catch {
+          /* keep status text */
+        }
+        throw new Error(detail);
+      }
 
-closeSidebarBtn.addEventListener('click', () => {
-  sidebar.classList.remove('open');
-});
+      const reader = res.body.getReader();
+      const decoder = new TextDecoder();
+      let buffer = '';
 
-// ─── Init ─────────────────────────────────────────────────────────────────────
-async function checkHealth() {
-  try {
-    const res = await fetch('/api/health');
-    if (res.ok) {
-      setStatus('connected', 'Connected');
-    } else {
-      setStatus('error', 'Server error');
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+
+        buffer += decoder.decode(value, { stream: true });
+        const chunks = buffer.split('\n\n');
+        buffer = chunks.pop();
+
+        for (const chunk of chunks) {
+          if (!chunk.trim()) continue;
+
+          let event = '';
+          let raw = '';
+          for (const line of chunk.split('\n')) {
+            if (line.startsWith('event:')) event = line.slice(6).trim();
+            else if (line.startsWith('data:')) raw += line.slice(5).trim();
+          }
+          if (!event) continue;
+
+          let data = {};
+          try {
+            data = JSON.parse(raw);
+          } catch {
+            continue;
+          }
+
+          handleEvent(event, data, ctx);
+        }
+      }
+    } catch (err) {
+      ctx.showError(
+        `I could not complete that request. ${err.message}. The demo data has not been modified.`
+      );
+    } finally {
+      ctx.finish();
+      busy = false;
+      setBusy(false);
+      inputEl.focus();
     }
-  } catch {
-    setStatus('error', 'Disconnected');
   }
-}
 
-checkHealth();
-autoResize();
-inputEl.focus();
+  function handleEvent(event, data, ctx) {
+    switch (event) {
+      case 'mode':
+        setMode(data.mode, data.reason, data.verified);
+        if (data.mode === 'offline' && !modeNoticeShown) {
+          modeNoticeShown = true;
+          ctx.showNotice(
+            '<strong>Deterministic mode.</strong> No model credential is configured in this environment, so the order was resolved by rule instead of by the language model. Every quantity comes from the same engine either way.'
+          );
+        }
+        break;
+
+      case 'status':
+        ctx.setStatus(data.message);
+        break;
+
+      case 'tool_start':
+        ctx.addTrace(data.id, data.name, data.input);
+        break;
+
+      case 'tool_result':
+        ctx.updateTrace(data.id, data.ok, data.error);
+        break;
+
+      case 'plan':
+        ctx.showPlan(data.plan);
+        break;
+
+      case 'text':
+        ctx.appendText(data.text);
+        break;
+
+      case 'text_delta':
+        ctx.appendText(data.text);
+        break;
+
+      case 'error':
+        ctx.showError(data.error);
+        break;
+
+      case 'done':
+        if (data.mode) setMode(data.mode, null, data.verified);
+        break;
+
+      default:
+        break;
+    }
+  }
+
+  // ─── Composer ───────────────────────────────────────────────────────────
+  function setBusy(value) {
+    sendBtn.disabled = value || !inputEl.value.trim();
+    document.querySelectorAll('.chip').forEach((chip) => {
+      chip.disabled = value;
+    });
+  }
+
+  function autoResize() {
+    inputEl.style.height = 'auto';
+    inputEl.style.height = `${Math.min(inputEl.scrollHeight, 132)}px`;
+    sendBtn.disabled = busy || !inputEl.value.trim();
+  }
+
+  formEl.addEventListener('submit', (event) => {
+    event.preventDefault();
+    const text = inputEl.value.trim();
+    if (!text || busy) return;
+    inputEl.value = '';
+    autoResize();
+    sendMessage(text);
+  });
+
+  inputEl.addEventListener('keydown', (event) => {
+    if (event.key === 'Enter' && !event.shiftKey) {
+      event.preventDefault();
+      formEl.requestSubmit();
+    }
+  });
+
+  inputEl.addEventListener('input', autoResize);
+
+  messagesEl.addEventListener('click', (event) => {
+    const chip = event.target.closest('.chip');
+    if (!chip || busy) return;
+    const message = chip.dataset.message;
+    if (!message) return;
+    inputEl.value = '';
+    autoResize();
+    sendMessage(message);
+  });
+
+  // ─── Data panel ─────────────────────────────────────────────────────────
+  function openPanel() {
+    panelEl.classList.add('open');
+    panelToggle.setAttribute('aria-expanded', 'true');
+    if (window.matchMedia('(max-width: 1080px)').matches) scrim.hidden = false;
+  }
+
+  function closePanel() {
+    panelEl.classList.remove('open');
+    panelToggle.setAttribute('aria-expanded', 'false');
+    scrim.hidden = true;
+  }
+
+  panelToggle.addEventListener('click', () => {
+    const mobile = window.matchMedia('(max-width: 1080px)').matches;
+
+    if (mobile) {
+      if (panelEl.classList.contains('open')) closePanel();
+      else openPanel();
+      return;
+    }
+
+    const collapsed = document.body.classList.toggle('panel-collapsed');
+    panelToggle.setAttribute('aria-expanded', String(!collapsed));
+  });
+
+  panelClose.addEventListener('click', closePanel);
+  scrim.addEventListener('click', closePanel);
+  document.addEventListener('keydown', (event) => {
+    if (event.key === 'Escape') closePanel();
+  });
+
+  function table(headers, rows) {
+    return `<table class="data-table">
+      <thead><tr>${headers.map((h) => `<th>${esc(h)}</th>`).join('')}</tr></thead>
+      <tbody>${rows
+        .map((row) => `<tr>${row.map((cell) => `<td>${esc(cell)}</td>`).join('')}</tr>`)
+        .join('')}</tbody>
+    </table>`;
+  }
+
+  async function loadDemoData() {
+    try {
+      const res = await fetch('/api/demo-data', { cache: 'no-store' });
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      const data = await res.json();
+
+      const orders = table(
+        ['Order', 'Product', 'Qty'],
+        data.orders.map((o) => [o.order_id, o.product_name, `${o.quantity} ${o.unit}`])
+      );
+
+      const bom = table(
+        ['Material', 'Name', 'Per unit'],
+        data.bom.map((b) => [b.material_id, b.material_name, `${b.qty_per_unit} ${b.unit}`])
+      );
+
+      const inventory = table(
+        ['Material', 'On hand', 'Reserved'],
+        data.inventory.map((i) => [i.material_id, `${i.on_hand} ${i.unit}`, i.reserved])
+      );
+
+      panelBody.innerHTML = `
+        <section class="data-section">
+          <h3>Production orders <span>${data.orders.length}</span></h3>
+          ${orders}
+        </section>
+        <section class="data-section">
+          <h3>Bill of materials <span>PROD-A</span></h3>
+          ${bom}
+        </section>
+        <section class="data-section">
+          <h3>Inventory <span>${data.inventory.length} materials</span></h3>
+          ${inventory}
+        </section>
+        <section class="data-section">
+          <h3>Calculation rules</h3>
+          <div class="rules">
+            required&nbsp;&nbsp;= BOM/unit × qty<br>
+            available&nbsp;= max(on_hand − reserved, 0)<br>
+            shortage&nbsp;&nbsp;= max(required − available, 0)<br>
+            <em>PR lines: shortage &gt; 0 only</em><br>
+            <em>PR status: PENDING_HUMAN_APPROVAL</em>
+          </div>
+        </section>`;
+    } catch (err) {
+      panelBody.innerHTML = `<p class="panel-loading">Could not load the demo dataset (${esc(
+        err.message
+      )}).</p>`;
+    }
+  }
+
+  // ─── Init ───────────────────────────────────────────────────────────────
+  setMode('checking');
+  autoResize();
+  inputEl.focus();
+
+  checkHealth();
+  healthTimer = setInterval(() => {
+    if (modeBadge.dataset.mode === 'checking') checkHealth();
+  }, 1500);
+  setTimeout(() => {
+    if (healthTimer) clearInterval(healthTimer);
+  }, 30000);
+
+  loadDemoData();
+})();
