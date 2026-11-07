@@ -6,7 +6,7 @@
 #
 # Required repository secrets (Settings → Secrets and variables → Actions):
 #   SSH_HOST        — server hostname or IP
-#   SSH_USER        — SSH username
+#   SSH_USER        — SSH username (ubuntu on the mufakat.id VPS)
 #   SSH_PRIVATE_KEY — private key permitted to run docker on the server
 #   SSH_PORT        — SSH port (optional, default 22)
 #   DEPLOY_PATH     — server checkout path (e.g. /home/ubuntu/projects/ppic-alters)
@@ -30,6 +30,8 @@ jobs:
   deploy:
     name: Build and restart container
     runs-on: ubuntu-latest
+    # SSH_* live on the `deploy` environment, so the job must opt into it.
+    environment: deploy
     if: github.ref == 'refs/heads/main'
     steps:
       - name: Deploy over SSH
