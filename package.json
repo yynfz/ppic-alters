@@ -1,16 +1,19 @@
 {
   "name": "ppic-alters",
-  "version": "1.0.0",
+  "version": "1.1.0",
   "description": "PPIC Alter-S — Agentic Production Planning and Inventory Intelligence assistant. Built with CodeBuddy Agent SDK.",
   "type": "module",
   "main": "server/index.js",
   "scripts": {
     "dev": "node server/index.js",
-    "start": "node server/index.js"
+    "start": "node server/index.js",
+    "test:backend": "python3 tests/test_compute.py -v",
+    "test": "python3 tests/test_compute.py -v"
   },
-  "keywords": ["ppic", "production-planning", "inventory", "agent", "codebuddy-sdk", "mcp"],
+  "keywords": ["ppic", "production-planning", "inventory", "agent", "codebuddy-sdk", "mcp", "supabase"],
   "license": "MIT",
   "dependencies": {
+    "@supabase/supabase-js": "^2.45.4",
     "@tencent-ai/agent-sdk": "^0.3.301",
     "express": "^4.21.2"
   }

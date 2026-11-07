@@ -1,0 +1,75 @@
+# PPIC Alter-S — CI: Test & Build
+# Runs on every push to main and on PRs.
+# Executes Python acceptance tests and checks Node.js build.
+
+name: CI Test & Build
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  test-python:
+    name: Python Acceptance Tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Run acceptance tests
+        run: |
+          python3 tests/test_compute.py -v
+
+      - name: Verify golden demo MO-001
+        run: |
+          output=$(python3 backend/compute_shortage.py MO-001 --json --no-write)
+          echo "$output" | python3 -c "
+          import sys, json
+          plan = json.load(sys.stdin)
+          lines = {l['material_id']: l for l in plan['lines']}
+          assert lines['MAT-A']['shortage'] == 300, f'MAT-A shortage mismatch: {lines[\"MAT-A\"][\"shortage\"]}'
+          assert lines['MAT-B']['shortage'] == 0, f'MAT-B shortage mismatch: {lines[\"MAT-B\"][\"shortage\"]}'
+          assert lines['MAT-C']['shortage'] == 300, f'MAT-C shortage mismatch: {lines[\"MAT-C\"][\"shortage\"]}'
+          assert plan['pr_draft']['status'] == 'PENDING_HUMAN_APPROVAL'
+          print('Golden demo MO-001 verified: 300/0/300, PENDING_HUMAN_APPROVAL')
+          "
+
+  test-node:
+    name: Node.js Build Check
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: 'npm'
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Check server syntax
+        run: node --check server/index.js
+
+      - name: Check supabase client syntax
+        run: node --check server/supabase-client.js
+
+      - name: Health check (import test)
+        run: |
+          node -e "
+          import('./server/supabase-client.js').then(m => {
+            console.log('supabase-client.js loads OK');
+            console.log('isSupabaseConfigured:', m.isSupabaseConfigured());
+            process.exit(0);
+          }).catch(e => {
+            console.error('Load error:', e.message);
+            process.exit(1);
+          });
+          "

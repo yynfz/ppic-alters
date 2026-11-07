@@ -42,3 +42,7 @@ credentials.json
 
 # Logs
 *.log
+logs/
+
+# Supabase local
+supabase/

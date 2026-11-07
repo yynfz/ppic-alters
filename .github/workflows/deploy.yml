@@ -1,0 +1,121 @@
+# PPIC Alter-S — Deploy to ppic.mufakat.id
+# Deploys the Express.js + Python backend to a VPS/cloud server via SSH.
+#
+# Prerequisites (set in GitHub repo → Settings → Secrets and variables → Actions):
+#   SSH_HOST        — server hostname or IP (e.g. ssh.mufakat.id)
+#   SSH_USER        — SSH username (e.g. deploy)
+#   SSH_PRIVATE_KEY — SSH private key (contents of ~/.ssh/id_ed25519 or similar)
+#   SSH_PORT        — SSH port (optional, default 22)
+#   DEPLOY_PATH     — deployment directory on server (e.g. /var/www/ppic-alters)
+#   SUPABASE_URL    — Supabase project URL (optional)
+#   SUPABASE_SERVICE_KEY — Supabase service role key (optional)
+#
+# Server requirements:
+#   - Node.js 22+
+#   - Python 3.10+
+#   - PM2 (process manager): npm install -g pm2
+#   - Nginx (reverse proxy to localhost:3000)
+#
+# Nginx config for ppic.mufakat.id (example):
+#   server {
+#       listen 80;
+#       server_name ppic.mufakat.id;
+#       location / {
+#           proxy_pass http://127.0.0.1:3000;
+#           proxy_http_version 1.1;
+#           proxy_set_header Upgrade $http_upgrade;
+#           proxy_set_header Connection 'upgrade';
+#           proxy_set_header Host $host;
+#           proxy_cache_bypass $http_upgrade;
+#       }
+#   }
+
+name: Deploy to ppic.mufakat.id
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+jobs:
+  deploy:
+    name: Deploy via SSH
+    runs-on: ubuntu-latest
+    needs: []
+    # Only deploy if CI would pass (uncomment after ci-test-build workflow exists)
+    # needs: [test-python, test-node]
+    if: github.ref == 'refs/heads/main'
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up SSH
+        run: |
+          mkdir -p ~/.ssh
+          echo "${{ secrets.SSH_PRIVATE_KEY }}" > ~/.ssh/deploy_key
+          chmod 600 ~/.ssh/deploy_key
+          ssh-keyscan -p ${{ secrets.SSH_PORT || '22' }} ${{ secrets.SSH_HOST }} >> ~/.ssh/known_hosts 2>/dev/null
+
+      - name: Sync files to server
+        uses: appleboy/ssh-action@v1.0.3
+        with:
+          host: ${{ secrets.SSH_HOST }}
+          username: ${{ secrets.SSH_USER }}
+          key: ${{ secrets.SSH_PRIVATE_KEY }}
+          port: ${{ secrets.SSH_PORT || '22' }}
+          script: |
+            set -e
+            DEPLOY_PATH="${{ secrets.DEPLOY_PATH }}"
+            mkdir -p "$DEPLOY_PATH"
+
+      - name: Upload files via rsync
+        uses: burnett01/rsync-deployments@7.0.1
+        with:
+          switches: -avzr --delete --exclude='.git' --exclude='node_modules' --exclude='.env' --exclude='__pycache__'
+          path: ./
+          remote_path: ${{ secrets.DEPLOY_PATH }}/
+          remote_host: ${{ secrets.SSH_HOST }}
+          remote_user: ${{ secrets.SSH_USER }}
+          remote_port: ${{ secrets.SSH_PORT || '22' }}
+          remote_key: ${{ secrets.SSH_PRIVATE_KEY }}
+
+      - name: Install deps and restart on server
+        uses: appleboy/ssh-action@v1.0.3
+        with:
+          host: ${{ secrets.SSH_HOST }}
+          username: ${{ secrets.SSH_USER }}
+          key: ${{ secrets.SSH_PRIVATE_KEY }}
+          port: ${{ secrets.SSH_PORT || '22' }}
+          script: |
+            set -e
+            DEPLOY_PATH="${{ secrets.DEPLOY_PATH }}"
+            cd "$DEPLOY_PATH"
+
+            # Install Node dependencies
+            npm ci --production
+
+            # Write .env from secrets
+            cat > .env << 'ENVEOF'
+            PORT=3000
+            DEMO_DATA_DIR=./demo-data
+            DEMO_ORDER_ID=MO-001
+            COMPUTE_SCRIPT=./backend/compute_shortage.py
+            ENVEOF
+
+            # Add Supabase config if provided
+            if [ -n "${{ secrets.SUPABASE_URL }}" ]; then
+              echo "SUPABASE_URL=${{ secrets.SUPABASE_URL }}" >> .env
+              echo "SUPABASE_SERVICE_KEY=${{ secrets.SUPABASE_SERVICE_KEY }}" >> .env
+            fi
+
+            # Restart with PM2
+            pm2 stop ppic-alters 2>/dev/null || true
+            pm2 delete ppic-alters 2>/dev/null || true
+            pm2 start server/index.js --name ppic-alters --update-env
+            pm2 save
+
+            # Verify
+            sleep 2
+            curl -s http://127.0.0.1:3000/api/health || echo "Health check failed!"
+            echo "Deploy complete — ppic.mufakat.id"
