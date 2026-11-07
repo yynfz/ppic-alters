@@ -20,6 +20,8 @@
   const panelToggle = document.getElementById('panelToggle');
   const panelClose = document.getElementById('panelClose');
   const scrim = document.getElementById('scrim');
+  const workflowStatus = document.getElementById('workflowStatus');
+  const workflowSteps = Array.from(document.querySelectorAll('#workflowSteps [data-step]'));
 
   const nf = new Intl.NumberFormat('en-US');
   const fmt = (n) => (typeof n === 'number' ? nf.format(n) : String(n ?? ''));
@@ -28,6 +30,63 @@
   let healthTimer = null;
   let modeReason = null;
   let modeNoticeShown = false;
+
+  // The steps visualize results observed in THIS web companion, not WorkBuddy
+  // telemetry. Planning and inventory share one deterministic tool invocation.
+  function stage(name, state) {
+    const item = workflowSteps.find((step) => step.dataset.step === name);
+    if (!item) return;
+    item.dataset.state = state;
+    if (state === 'active') item.setAttribute('aria-current', 'step');
+    else item.removeAttribute('aria-current');
+  }
+
+  function workflowLabel(text) {
+    if (workflowStatus) workflowStatus.textContent = text;
+  }
+
+  function resetWorkflow() {
+    workflowSteps.forEach((item) => {
+      item.dataset.state = 'idle';
+      item.removeAttribute('aria-current');
+    });
+    stage('intake', 'active');
+    workflowLabel('Validating the request…');
+  }
+
+  function showPlanningStart() {
+    stage('intake', 'complete');
+    stage('planning', 'active');
+    workflowLabel('Reading the order and calculating the material plan…');
+  }
+
+  function showVerifiedPlan(plan) {
+    stage('intake', 'complete');
+    stage('planning', 'complete');
+    stage('inventory', 'complete');
+    const draftExists = Array.isArray(plan?.pr_draft?.lines) && plan.pr_draft.lines.length > 0;
+    stage('purchasing', draftExists ? 'complete' : 'skipped');
+    // Never show review as completed. This application cannot approve or buy.
+    stage('review', draftExists ? 'pending' : 'skipped');
+    stage('explanation', 'active');
+    workflowLabel(draftExists ? 'Draft created · human review required' : 'Stock covered · no PR required');
+  }
+
+  function showFlowError() {
+    const active = workflowSteps.find((item) => item.dataset.state === 'active');
+    if (active) stage(active.dataset.step, 'error');
+    workflowLabel('Check could not be completed');
+  }
+
+  function finishWorkflow(hasPlan, failed) {
+    if (failed) return;
+    if (hasPlan) {
+      stage('explanation', 'complete');
+      return;
+    }
+    stage('intake', 'complete');
+    workflowLabel('No material plan generated');
+  }
 
   // ─── Icons ──────────────────────────────────────────────────────────────
   const ICON = {
@@ -161,6 +220,8 @@
     const bodyEl = article.querySelector('.msg-body');
 
     const ctx = {
+      hasPlan: false,
+      failed: false,
       buffer: '',
       typing: textEl.querySelector('.typing-row'),
       traces: new Map(),
@@ -186,6 +247,7 @@
 
       addTrace(id, name, input) {
         ctx.clearTyping();
+        showPlanningStart();
         const arg = input?.order_id ? `(${input.order_id})` : '';
         const el = document.createElement('div');
         el.className = 'trace';
@@ -203,6 +265,10 @@
         if (!el) return;
         const { name, arg } = el.dataset;
         el.dataset.state = ok ? 'ok' : 'error';
+        if (!ok) {
+          ctx.failed = true;
+          showFlowError();
+        }
         el.innerHTML = ok
           ? `${ICON.check}<span class="trace-name">${esc(name)}</span><span>${esc(arg)}</span><span class="trace-status">verified</span>`
           : `${ICON.alert}<span class="trace-name">${esc(name)}</span><span class="trace-status">${esc(
@@ -213,6 +279,8 @@
 
       showPlan(plan) {
         ctx.clearTyping();
+        ctx.hasPlan = true;
+        showVerifiedPlan(plan);
         const pr = plan.pr_draft;
         // A fully covered order returns a pr_draft shell with no lines and
         // status NO_PURCHASE_NEEDED. Never render that as a purchase request.
@@ -225,6 +293,8 @@
 
       showError(message) {
         ctx.clearTyping();
+        ctx.failed = true;
+        showFlowError();
         const el = document.createElement('div');
         el.className = 'notice notice-error';
         el.innerHTML = `${ICON.alert}<div>${esc(message)}</div>`;
@@ -260,6 +330,15 @@
       shortCount > 0
         ? `<span class="pill pill-warn">${shortCount} of ${lines.length} short</span>`
         : `<span class="pill pill-ok">Fully covered</span>`;
+    const verdict = shortCount > 0
+      ? `<div class="plan-verdict" data-verdict="short">
+           <strong>Not ready from current stock</strong>
+           <span>${shortCount} material${shortCount === 1 ? '' : 's'} need replenishment before the order can be produced.</span>
+         </div>`
+      : `<div class="plan-verdict" data-verdict="ready">
+           <strong>All materials available</strong>
+           <span>Available inventory covers this order. No purchase request is needed.</span>
+         </div>`;
 
     const due = order.due_date
       ? new Date(`${order.due_date}T00:00:00`).toLocaleDateString('en-GB', {
@@ -317,7 +396,8 @@
         </div>
         ${pill}
       </div>
-      <div class="table-scroll">
+      ${verdict}
+      <div class="table-scroll" role="region" aria-label="Material requirements for ${esc(order.order_id)}" tabindex="0">
         <table class="plan-table">
           <thead>
             <tr>
@@ -360,12 +440,12 @@
           <p class="pr-label">Draft purchase request</p>
           <div class="pr-id">${esc(pr.pr_id)}</div>
         </div>
-        <span class="pill pill-pending">${esc(pr.status)}</span>
+        <span class="pill pill-pending" title="This is not an approved purchase order">${esc(pr.status)}</span>
       </div>
       <ul class="pr-lines">${lines}</ul>
       <div class="pr-foot">
         ${ICON.lock}
-        <span>Draft only — no purchase order has been created. A planner must approve this request before any PO is issued.</span>
+        <span><strong>Human review required.</strong> This is a recommendation, not an approval. No purchase order has been created or sent.</span>
       </div>
     </section>`;
   }
@@ -376,6 +456,7 @@
 
     busy = true;
     setBusy(true);
+    resetWorkflow();
     addUserMessage(text);
 
     const ctx = startAssistantMessage();
@@ -484,6 +565,7 @@
 
       case 'done':
         if (data.mode) setMode(data.mode, null, data.verified);
+        finishWorkflow(ctx.hasPlan, ctx.failed);
         break;
 
       default:
