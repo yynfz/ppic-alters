@@ -195,7 +195,7 @@ select
     o.quantity,
     o.unit,
     b.material_id,
-    b.material_name,
+    m.material_name,
     b.qty_per_unit,
     (b.qty_per_unit * o.quantity) as required,
     i.on_hand,
@@ -204,6 +204,7 @@ select
     greatest((b.qty_per_unit * o.quantity) - greatest(i.on_hand - i.reserved, 0), 0) as shortage
 from production_orders o
 join bom b on o.product_id = b.product_id
+join materials m on b.material_id = m.material_id
 join inventory i on b.material_id = i.material_id
 where o.status = 'OPEN';
 

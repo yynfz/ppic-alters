@@ -14,7 +14,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 import { runTurn, ensureAgent, agentStatus } from './agent.js';
-import { demoData, computePlan } from './engine.js';
+import { demoData, computePlan, dataSource } from './engine.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const PROJECT_ROOT = path.resolve(__dirname, '..');
@@ -37,14 +37,15 @@ app.get('/api/health', (req, res) => {
       reason: agent.reason,
       verified: agent.verified,
     },
+    dataSource: dataSource(), // 'supabase' | 'csv'
   });
 });
 
 // ─── Demo data (read-only) ───────────────────────────────────────────────────
 
-app.get('/api/demo-data', (req, res) => {
+app.get('/api/demo-data', async (req, res) => {
   try {
-    res.json(demoData());
+    res.json(await demoData());
   } catch (err) {
     res.status(500).json({ error: `Could not read demo data: ${err.message}` });
   }
