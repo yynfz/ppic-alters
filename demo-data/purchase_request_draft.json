@@ -1,0 +1,22 @@
+{
+  "pr_id": "PR-MO-001",
+  "order_id": "MO-001",
+  "product_id": "PROD-A",
+  "product_name": "Product A",
+  "status": "PENDING_HUMAN_APPROVAL",
+  "note": "DRAFT ONLY — no purchase has been made. A human must review and approve before any PO is created.",
+  "lines": [
+    {
+      "material_id": "MAT-A",
+      "material_name": "Resin",
+      "unit": "kg",
+      "quantity": 300
+    },
+    {
+      "material_id": "MAT-C",
+      "material_name": "Label",
+      "unit": "pcs",
+      "quantity": 300
+    }
+  ]
+}

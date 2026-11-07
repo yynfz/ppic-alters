@@ -1,0 +1,4 @@
+material_id,material_name,unit,on_hand,reserved
+MAT-A,Resin,kg,760,60
+MAT-B,Packaging,pcs,600,50
+MAT-C,Label,pcs,800,100

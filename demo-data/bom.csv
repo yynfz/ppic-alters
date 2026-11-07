@@ -1,0 +1,4 @@
+product_id,material_id,material_name,unit,qty_per_unit
+PROD-A,MAT-A,Resin,kg,2
+PROD-A,MAT-B,Packaging,pcs,1
+PROD-A,MAT-C,Label,pcs,2

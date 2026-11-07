@@ -23,4 +23,18 @@ For each test, record: **Test ID | Date | Input | Expected | Actual | PASS/FAIL 
 - If evidence is unavailable, write NOT RUN or BLOCKED and explain.
 - Attach at least 3 clear WorkBuddy screenshots and relevant file outputs.
 
+## Automated backend tests
+
+`test_compute.py` (stdlib `unittest`, no dependencies) verifies the
+deterministic backend against the PRD golden demo — AC-02..AC-06,
+AC-08 (unknown order → honest error), plus edge cases (reserved >
+on-hand floors at 0, zero-quantity order, MO-002 no-shortage path,
+JSON/CSV consistency). Run from the repo root:
+
+```bash
+python3 -m unittest discover -s tests -v
+```
+
+Latest run: 12 tests, all PASS — see `test_results_2026-11-07.log`.
+
 See `docs/PRD.md` section 9 for the full test results report layout.

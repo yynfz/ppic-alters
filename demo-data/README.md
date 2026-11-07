@@ -1,14 +1,21 @@
 # Demo Data — SYNTHETIC
 
-All data in this directory is **SYNTHETIC DEMO DATA** — not real production, customer, or supplier data.
+All data in this directory is **SYNTHETIC DEMO DATA** — not real production, customer, or supplier data. The structure mirrors the PT Pachira Distrinusa database (production orders, BOM/formula tables, stock ledger), but every value is invented for the hackathon golden demo.
 
-## Expected Files
+## Files
 
-- `orders.csv` / `production_order.json` — seeded production order (MO-001, Product A, 500 units)
+- `orders.csv` / `production_order.json` — seeded production orders (MO-001, Product A, 500 units; MO-002, Product A, 100 units — the no-shortage path)
 - `bom.csv` / `bom.json` — Bill of Materials per product
 - `inventory.csv` / `inventory.json` — on-hand and reserved stock per SKU
-- `purchase_request_draft.json` — generated draft PR output
-- `compute_shortage.py` — deterministic shortage calculation script (may also live in `backend/`)
+- `purchase_request_draft.json` — generated draft PR output for MO-001 (regenerate with the backend script; do not hand-edit)
+
+## Calculation script
+
+The deterministic script lives in `backend/compute_shortage.py` (stdlib only):
+
+```bash
+python3 backend/compute_shortage.py MO-001   # regenerates purchase_request_draft.json
+```
 
 ## Demo Dataset (MO-001, 500 units)
 
