@@ -19,7 +19,7 @@
       </div>
       <div class="brand-text">
         <h1>PPIC Alter-S</h1>
-        <p>Agentic production planning &amp; inventory intelligence</p>
+        <p>Production planning · Inventory evidence · Human oversight</p>
       </div>
     </div>
 
@@ -39,34 +39,53 @@
   </header>
 
   <div class="layout">
-    <main class="chat">
-      <div class="messages" id="messages">
+    <main class="chat" id="main-content">
+      <section class="workflow-rail" aria-label="Decision workflow">
+        <div class="workflow-rail-head">
+          <div>
+            <p class="eyebrow">PRD v1.1 · WEB DEMONSTRATION</p>
+            <h2>From order to human review</h2>
+          </div>
+          <span class="workflow-status" id="workflowStatus" role="status" aria-live="polite">Ready for an order</span>
+        </div>
+        <ol class="workflow-steps" id="workflowSteps" aria-label="Six workflow stages">
+          <li data-step="intake" data-state="idle"><span class="step-index">01</span><span>Intake</span></li>
+          <li data-step="planning" data-state="idle"><span class="step-index">02</span><span>Planning</span></li>
+          <li data-step="inventory" data-state="idle"><span class="step-index">03</span><span>Inventory</span></li>
+          <li data-step="purchasing" data-state="idle"><span class="step-index">04</span><span>PR draft</span></li>
+          <li data-step="review" data-state="idle"><span class="step-index">05</span><span>Human review</span></li>
+          <li data-step="explanation" data-state="idle"><span class="step-index">06</span><span>Explanation</span></li>
+        </ol>
+        <p class="workflow-clarifier">Stage indicators summarize this web preview's tool results. They are not proof of native WorkBuddy execution.</p>
+      </section>
+      <div class="messages" id="messages" aria-label="Planner conversation" aria-live="polite" aria-relevant="additions">
         <article class="msg msg-assistant" id="welcome">
           <div class="avatar" aria-hidden="true">AS</div>
           <div class="msg-body">
             <div class="welcome-card">
-              <h2>Material availability, without the guesswork.</h2>
+              <p class="eyebrow">OMNI LOBSTER / JOINT INTELLIGENCE</p>
+              <h2>A clear decision before production starts.</h2>
               <p>
-                I read a production order and its bill of materials, check available stock, and compute
-                shortages with fixed rules — then prepare a purchase request draft for you to review.
-                I never invent quantities and I never place an order.
+                Check an order against its bill of materials and actual available inventory in three
+                traceable steps. This supporting web demo uses deterministic calculations to prepare
+                a purchase request <strong>draft</strong>, never a purchase order or automatic approval.
               </p>
 
-              <ol class="steps">
-                <li><span>1</span> Read order &amp; BOM</li>
-                <li><span>2</span> Check available stock</li>
-                <li><span>3</span> Draft PR for review</li>
-              </ol>
+              <div class="demo-callout">
+                <strong>Golden demo: MO-001</strong>
+                <span>500 units of Product A · review the evidence, shortage quantities and pending PR.</span>
+              </div>
+              <p class="scenario-title">Explore the three acceptance scenarios</p>
 
               <div class="chips">
-                <button class="chip" type="button" data-message="Can we produce 500 units of Product A for order MO-001?">
-                  Can we produce 500 units of Product A for order MO-001?
-                </button>
-                <button class="chip" type="button" data-message="What materials are short for MO-001?">
-                  What materials are short for MO-001?
+                <button class="chip" type="button" data-message="Can we produce 500 units of Product A for order MO-001? Check the BOM and available inventory, identify shortages, and prepare a purchase request draft for human review.">
+                  <strong>01 · Golden path</strong><span>MO-001 · shortages &amp; draft PR</span>
                 </button>
                 <button class="chip" type="button" data-message="Check material availability for order MO-002">
-                  Check material availability for order MO-002
+                  <strong>02 · Covered order</strong><span>MO-002 · no PR required</span>
+                </button>
+                <button class="chip" type="button" data-message="Check material availability for order MO-999">
+                  <strong>03 · Error handling</strong><span>MO-999 · unknown order</span>
                 </button>
               </div>
             </div>
@@ -90,7 +109,7 @@
         </form>
         <p class="composer-note">
           <span class="dot" aria-hidden="true"></span>
-          Synthetic demo data. Calculations are deterministic. No purchase order is ever created.
+          Synthetic data · Deterministic quantities · No purchasing or approval actions in this interface.
         </p>
       </div>
     </main>
@@ -106,6 +125,11 @@
             <path d="M6 6l12 12M18 6L6 18" stroke-linecap="round" />
           </svg>
         </button>
+      </div>
+      <div class="panel-context">
+        <strong>Evidence, not automation theatre.</strong>
+        <p>This interface is a supporting demo. WorkBuddy orchestration and original screenshots must be verified separately for the submission.</p>
+        <a href="https://github.com/yynfz/ppic-alters/blob/main/docs/PRD.md" target="_blank" rel="noopener noreferrer">Read PRD v1.1 <span aria-hidden="true">↗</span></a>
       </div>
       <div class="panel-body" id="panelBody">
         <p class="panel-loading">Loading dataset…</p>
