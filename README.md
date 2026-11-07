@@ -58,13 +58,15 @@ ppic-alters/
 │   ├── inventory.csv / inventory.json
 │   └── purchase_request_draft.json
 ├── server/                    # Express backend + Agent SDK
-│   ├── index.js               # Express server, SSE streaming, SDK Session API
+│   ├── index.js               # HTTP layer: SSE streaming, health, demo data
+│   ├── agent.js               # CodeBuddy Agent SDK session, MCP tool, fallback
+│   ├── engine.js              # Node wrapper around the deterministic engine
 │   └── compute_shortage.py    # Deterministic BOM/inventory/shortage engine
 ├── public/                    # Static chat frontend
 │   ├── index.html             # Chat UI shell
 │   ├── app.js                 # SSE client, streaming render, Markdown
 │   └── styles.css             # Professional planner UI theme
-├── screenshots/               # Runtime verification screenshots
+├── screenshots/               # Runtime verification screenshots (see below)
 ├── backend/                   # (PRD reference docs)
 ├── mcp-server/                # (PRD reference docs)
 ├── workbuddy/                 # Agent instructions and setup
@@ -95,6 +97,21 @@ ppic-alters/
 - `shortage = max(required − available, 0)`
 
 **Draft PR:** PR-MO-001, lines MAT-A 300 kg + MAT-C 300 pcs, status PENDING_HUMAN_APPROVAL (MAT-B excluded).
+
+## Screenshots
+
+Captured from the running app (`screenshots/`), one per acceptance scenario:
+
+| File | Scenario | What it proves |
+|---|---|---|
+| `01-welcome.png` | Landing state | Chat shell, synthetic-data notice, agent mode badge |
+| `02-material-plan.png` | MO-001, 500 units | Required 1000/500/1000, available 700/550/700, shortage 300/0/300, calculation trace, draft PR-MO-001 |
+| `03-covered-order.png` | MO-002, 100 units | Fully covered order — no purchase request is created |
+| `04-unknown-order.png` | MO-999 | Honest error listing known orders, no fabricated data |
+| `05-mobile.png` | MO-001 on 390px | Responsive layout, horizontally scrollable plan table |
+
+The badge in each capture reflects the live agent mode, so the screenshots never claim a
+language model answered when it did not.
 
 ## WorkBuddy Workflow Steps
 
@@ -149,7 +166,9 @@ This repository includes a **runnable Agent Web application** built with the [Co
 
 - **Node.js** ≥ 18 (tested on Node 22)
 - **Python 3** (for the deterministic calculation engine)
-- **CodeBuddy CLI** installed and authenticated (`codebuddy` on PATH)
+- A **CodeBuddy model credential** — set `CODEBUDDY_API_KEY` (get one at
+  [codebuddy.ai/profile/keys](https://www.codebuddy.ai/profile/keys)). Without it the app
+  still runs, in deterministic mode (see below).
 
 ### Install & Run
 
@@ -159,11 +178,33 @@ npm start
 # → PPIC Alter-S running at http://localhost:3000
 ```
 
-Open `http://localhost:3000` in your browser and ask, for example:
+Open `http://localhost:3000` and ask, for example:
 
 > Can we produce 500 units of Product A for order MO-001?
 
-The planner chat streams the agent's reasoning live, shows tool calls (read order → read BOM → read inventory → `compute_material_plan`), and renders the material plan table + draft PR card.
+The planner chat streams the agent's answer, shows the tool call it made, and renders the
+material plan table plus the draft PR card.
+
+### Two execution modes
+
+| Mode | When | What answers |
+|---|---|---|
+| **Agent ready** | `CODEBUDDY_API_KEY` is set and the session connects | A CodeBuddy Agent SDK session. The model interprets the question and calls `compute_material_plan`; it never does arithmetic itself. |
+| **Deterministic mode** | No credential, or the credential is rejected | A deterministic orchestrator that resolves the order reference and calls the same tool. Identical numbers, identical guardrails, no model. |
+
+The header badge always states which mode is live, and the first answer in deterministic mode
+says so explicitly. The app never pretends a model reasoned when one did not.
+
+To reuse a desktop `codebuddy` login instead of an API key, start with `PPIC_FORCE_SDK=1`.
+
+### API
+
+| Endpoint | Purpose |
+|---|---|
+| `POST /api/chat` | SSE turn: `mode`, `status`, `tool_start`, `tool_result`, `plan`, `text`, `done` |
+| `GET /api/health` | Service status plus `agent.mode`, `agent.verified`, `agent.reason` |
+| `GET /api/demo-data` | Read-only synthetic dataset for the side panel |
+| `GET /api/plan/:orderId` | Deterministic plan as JSON (404 with an honest error for unknown orders) |
 
 ### Architecture (Implementation)
 
@@ -171,11 +212,14 @@ The planner chat streams the agent's reasoning live, shows tool calls (read orde
 Browser (Chat UI)        SSE stream         Express Server            CodeBuddy Agent SDK
    |  user message  ──────────────►  POST /api/chat  ──────►  unstable_v2_createSession()
    |  text_delta    ◄──────────────   (SSE)          ◄──────   Session.stream()
-   |  tool_use      ◄──────────────                            ↳ systemPrompt = PPIC Alter-S
-   |  tool_result   ◄──────────────                            ↳ mcpServers.ppIC = createSdkMcpServer()
-   |  result        ◄──────────────                                ↳ tool compute_material_plan
+   |  tool_start    ◄──────────────                            ↳ systemPrompt = PPIC Alter-S
+   |  plan          ◄──────────────                            ↳ mcpServers.ppic = createSdkMcpServer()
+   |  done          ◄──────────────                                ↳ tool compute_material_plan
    |                                                                   → runs compute_shortage.py
 ```
+
+Every number on screen travels the same path: `engine.js` → `compute_shortage.py`. Both the
+model and the deterministic orchestrator can only *read* the result of that call.
 
 **Deterministic rules** (enforced in `compute_shortage.py`, never by the LLM):
 - `required = BOM per unit × quantity`
@@ -183,9 +227,13 @@ Browser (Chat UI)        SSE stream         Express Server            CodeBuddy 
 - `shortage = max(required − available, 0)`
 
 **Guardrails:**
-- The agent can only read demo-data files and call the deterministic tool — it cannot invent numbers.
-- Purchase requests are always created as **drafts** with status `PENDING_HUMAN_APPROVAL`; no real PO is ever created.
-- If an order does not exist, the tool returns an honest error and the agent relays it without fabricating data.
+- The agent is read-only: `Bash`, `Write`, `Edit`, and web tools are disabled, and its only
+  allowed tool is `compute_material_plan`.
+- It cannot invent numbers — every figure must come back from a tool result.
+- Purchase requests are always **drafts** with status `PENDING_HUMAN_APPROVAL`; no real PO is
+  ever created, and there is no code path that could create one.
+- An unknown order returns an explicit error listing the orders that do exist. Nothing is
+  substituted or fabricated, and the UI shows the error verbatim.
 
 
 ## Data Notice

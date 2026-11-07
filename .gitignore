@@ -46,3 +46,6 @@ logs/
 
 # Supabase local
 supabase/
+
+# WorkBuddy internal workspace data
+.workbuddy-ai/
