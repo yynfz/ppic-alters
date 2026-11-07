@@ -49,14 +49,27 @@ Key principles:
 ## Repository Structure
 
 ```
-ppic-alter-s/
+ppic-alters/
 ├── docs/
 │   └── PRD.md                 # Product Requirements Document (v1.1)
-├── demo-data/                 # SYNTHETIC demo datasets (CSV/JSON)
-├── backend/                   # Deterministic logic & calculation scripts
-├── mcp-server/                # MCP connector (if using MCP path)
+├── demo-data/                 # SYNTHETIC demo datasets (CSV + JSON)
+│   ├── orders.csv / production_order.json
+│   ├── bom.csv / bom.json
+│   ├── inventory.csv / inventory.json
+│   └── purchase_request_draft.json
+├── server/                    # Express backend + Agent SDK
+│   ├── index.js               # Express server, SSE streaming, SDK Session API
+│   └── compute_shortage.py    # Deterministic BOM/inventory/shortage engine
+├── public/                    # Static chat frontend
+│   ├── index.html             # Chat UI shell
+│   ├── app.js                 # SSE client, streaming render, Markdown
+│   └── styles.css             # Professional planner UI theme
+├── screenshots/               # Runtime verification screenshots
+├── backend/                   # (PRD reference docs)
+├── mcp-server/                # (PRD reference docs)
 ├── workbuddy/                 # Agent instructions and setup
 ├── tests/                     # Acceptance test cases (AC-01..AC-10)
+├── package.json               # Node deps: @tencent-ai/agent-sdk, express
 ├── .env.example               # Environment variable template
 ├── .gitignore
 ├── LICENSE                    # MIT
@@ -130,7 +143,50 @@ Video: 5–8 minutes (target 6:30). See `docs/PRD.md` section 7 for storyboard.
 
 ## Setup
 
-> _Detailed setup instructions will be added as implementation progresses._
+This repository includes a **runnable Agent Web application** built with the [CodeBuddy Agent SDK](https://www.npmjs.com/package/@tencent-ai/agent-sdk) (`@tencent-ai/agent-sdk`). The Express backend creates an Agent session with a PPIC Alter-S system prompt and a custom MCP tool (`compute_material_plan`) that delegates all arithmetic to the deterministic Python engine — the AI never invents BOM or stock numbers.
+
+### Prerequisites
+
+- **Node.js** ≥ 18 (tested on Node 22)
+- **Python 3** (for the deterministic calculation engine)
+- **CodeBuddy CLI** installed and authenticated (`codebuddy` on PATH)
+
+### Install & Run
+
+```bash
+npm install
+npm start
+# → PPIC Alter-S running at http://localhost:3000
+```
+
+Open `http://localhost:3000` in your browser and ask, for example:
+
+> Can we produce 500 units of Product A for order MO-001?
+
+The planner chat streams the agent's reasoning live, shows tool calls (read order → read BOM → read inventory → `compute_material_plan`), and renders the material plan table + draft PR card.
+
+### Architecture (Implementation)
+
+```
+Browser (Chat UI)        SSE stream         Express Server            CodeBuddy Agent SDK
+   |  user message  ──────────────►  POST /api/chat  ──────►  unstable_v2_createSession()
+   |  text_delta    ◄──────────────   (SSE)          ◄──────   Session.stream()
+   |  tool_use      ◄──────────────                            ↳ systemPrompt = PPIC Alter-S
+   |  tool_result   ◄──────────────                            ↳ mcpServers.ppIC = createSdkMcpServer()
+   |  result        ◄──────────────                                ↳ tool compute_material_plan
+   |                                                                   → runs compute_shortage.py
+```
+
+**Deterministic rules** (enforced in `compute_shortage.py`, never by the LLM):
+- `required = BOM per unit × quantity`
+- `available = max(on-hand − reserved, 0)`
+- `shortage = max(required − available, 0)`
+
+**Guardrails:**
+- The agent can only read demo-data files and call the deterministic tool — it cannot invent numbers.
+- Purchase requests are always created as **drafts** with status `PENDING_HUMAN_APPROVAL`; no real PO is ever created.
+- If an order does not exist, the tool returns an honest error and the agent relays it without fabricating data.
+
 
 ## Data Notice
 

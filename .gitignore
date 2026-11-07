@@ -36,3 +36,9 @@ Thumbs.db
 *.pem
 *.key
 credentials.json
+
+# CodeBuddy Agent SDK runtime config (auto-generated on server start)
+.codebuddy-sdk/
+
+# Logs
+*.log
