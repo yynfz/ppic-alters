@@ -131,6 +131,48 @@ cat ~/.ssh/ppic_deploy
    - Logs to `~/.pm2/logs/ppic-alters-*.log`
    - Survives server reboots (with `pm2 startup` + `pm2 save`)
 
+## Docker + Traefik (used on the mufakat.id VPS)
+
+The steps above assume bare-metal nginx + certbot on ports 80/443. On the VPS that
+already runs **traefik** (which owns 80/443 for `yayan.mufakat.id`,
+`supplyright.mufakat.id`, …), use the container setup instead:
+
+```bash
+cd ~/projects/ppic-alters
+cp .env.example .env          # fill in CODEBUDDY_API_KEY
+docker compose up -d --build
+curl http://127.0.0.1/api/health -H 'Host: ppic.mufakat.id'
+```
+
+- TLS + routing come from traefik labels in `docker-compose.yml` (`certresolver=letsencrypt`).
+- Requires a DNS A record `ppic.mufakat.id → <VPS IP>` **before** the first request,
+  otherwise ACME fails with `NXDOMAIN` (traefik retries automatically once DNS exists).
+- The `ppic-sdk-config` volume persists CodeBuddy auth across rebuilds.
+
+### Agent authentication (required for `/api/chat`)
+
+`/api/health`, `/` and `/api/demo-data` work without credentials, but the chat
+endpoint needs a model backend.
+
+**Option A — Tencent-hosted models** (key from <https://www.codebuddy.ai/profile/keys>):
+
+```
+CODEBUDDY_API_KEY=<key>
+# CODEBUDDY_INTERNET_ENVIRONMENT=internal   # China edition only
+```
+
+**Option B — any OpenAI-compatible provider** (verified working with DeepSeek):
+set the key plus a base URL and pick a model with `PPIC_MODEL`:
+
+```
+CODEBUDDY_API_KEY=<provider key>
+CODEBUDDY_BASE_URL=https://api.deepseek.com/
+PPIC_MODEL=deepseek-v4-pro
+```
+
+`CODEBUDDY_API_KEY` wins over OAuth/session auth, so no `/login` is needed.
+Apply changes with `docker compose up -d --force-recreate`.
+
 ## Manual Deployment (without GitHub Actions)
 
 ```bash
