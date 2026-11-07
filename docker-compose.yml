@@ -1,0 +1,41 @@
+# PPIC Alter-S — Docker deployment behind the existing traefik instance.
+# Replaces the nginx + certbot path in docs/DEPLOYMENT.md (ports 80/443 are
+# already owned by the traefik container on this VPS).
+services:
+  ppic-alters:
+    build: .
+    image: ppic-alters:latest
+    container_name: ppic-alters
+    restart: unless-stopped
+    env_file: .env
+    environment:
+      PORT: "3000"
+      NODE_ENV: production
+    volumes:
+      # CodeBuddy/WorkBuddy auth + CLI state must survive container rebuilds
+      - ppic-sdk-config:/app/.codebuddy-sdk
+      - ./logs:/app/logs
+    networks:
+      - yayan-cv_default
+    labels:
+      traefik.enable: "true"
+      traefik.docker.network: "yayan-cv_default"
+      # HTTP -> HTTPS redirect
+      traefik.http.routers.ppic-http.entrypoints: "web"
+      traefik.http.routers.ppic-http.rule: "Host(`ppic.mufakat.id`)"
+      traefik.http.routers.ppic-http.middlewares: "ppic-https"
+      traefik.http.middlewares.ppic-https.redirectscheme.scheme: "https"
+      traefik.http.middlewares.ppic-https.redirectscheme.permanent: "true"
+      # HTTPS
+      traefik.http.routers.ppic.entrypoints: "websecure"
+      traefik.http.routers.ppic.rule: "Host(`ppic.mufakat.id`)"
+      traefik.http.routers.ppic.tls: "true"
+      traefik.http.routers.ppic.tls.certresolver: "letsencrypt"
+      traefik.http.services.ppic.loadbalancer.server.port: "3000"
+
+networks:
+  yayan-cv_default:
+    external: true
+
+volumes:
+  ppic-sdk-config:
