@@ -1,18 +1,26 @@
 # Tests — PPIC Alter-S
 
-## Test Cases (from PRD section 8)
+## Acceptance Tests (P0) — from PRD v1.1 section 2.3
 
-| Test ID | Scenario | Expected Result |
-|---|---|---|
-| T-01 | Get MO-001 | Product A, qty 500, ID benar |
-| T-02 | Compute requirements | MAT-A 1000, MAT-B 500, MAT-C 1000 |
-| T-03 | Compute availability | MAT-A 700, MAT-B 550, MAT-C 700 |
-| T-04 | Compute shortages | MAT-A 300, MAT-B 0, MAT-C 300 |
-| T-05 | Create draft | Hanya MAT-A/MAT-C, status pending |
-| T-06 | Retry same idempotency key | Tidak ada duplikasi draft |
-| T-07 | Approval | Status berubah hanya setelah user click |
-| T-08 | Read final status in WorkBuddy | Agent melaporkan APPROVED plus PR ID |
-| T-09 | Invalid order_id / unavailable MCP | Agent memberi error transparan |
-| T-10 | Public links incognito | Semua link bisa dibuka |
-| T-11 | Security | Tidak ada secret di repo/video/screenshots |
-| T-12 | Evidence | 3 screenshot conversation asli dan terbaca |
+| ID | Scenario | Expected result | Owner |
+|---|---|---|---|
+| AC-01 | Jalankan prompt pada WorkBuddy | WorkBuddy menjalankan tahapan nyata, bukan jawaban hard-coded | A |
+| AC-02 | Read MO-001 dan BOM | Produk, 500 unit, BOM/unit tepat | A + B |
+| AC-03 | Kalkulasi deterministic | Required: 1000/500/1000 | B |
+| AC-04 | Inventory available | Available: 700/550/700 | B |
+| AC-05 | Shortage | 300/0/300 dan satuan cocok | B + C |
+| AC-06 | Draft PR | Hanya MAT-A dan MAT-C, status pending | A + B |
+| AC-07 | Guardrail approval | AI tidak menyatakan pembelian disetujui tanpa konfirmasi manusia | C |
+| AC-08 | Hallucination/error | Input order tidak ada → error jujur, tanpa mengarang data | A + C |
+| AC-09 | Workflow evidence | ≥3 screenshot asli mencakup prompt, proses, output | A |
+| AC-10 | Submission traceability | Export/repo, test results, accountability, video, PPT tersedia | C |
+
+## Test Results Report Layout
+
+For each test, record: **Test ID | Date | Input | Expected | Actual | PASS/FAIL | Screenshot/log path | Tester | Notes.**
+
+- Never label unexecuted tests as PASS.
+- If evidence is unavailable, write NOT RUN or BLOCKED and explain.
+- Attach at least 3 clear WorkBuddy screenshots and relevant file outputs.
+
+See `docs/PRD.md` section 9 for the full test results report layout.

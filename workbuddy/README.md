@@ -1,16 +1,29 @@
 # WorkBuddy Agent Configuration
 
-This directory contains WorkBuddy AI agent setup, prompts, and skill policies.
+This directory contains WorkBuddy AI agent setup, instructions, and workflow configuration.
 
 ## Files
 
-- `prompts.md` — agent instructions and guardrails
-- `setup.md` — WorkBuddy + MCP connection setup guide
+- `workbuddy-instructions.md` — agent instructions and guardrails
+- `prompts.md` — golden prompt and test prompts
 
-## Agent Guardrails (from PRD section 5.4)
+## Workflow Steps (from PRD v1.1 section 3.2)
 
-- **Planning:** pahami order, minta data produksi, jangan menebak BOM.
-- **Inventory:** gunakan available stock dari tool, jangan samakan on-hand dengan free stock.
-- **Purchasing:** buat PR draft hanya untuk shortage dan mintakan approval manusia.
-- **Orchestrator:** tampilkan alasan, referensi source/tool, exception secara transparan.
-- **Approval:** agent tidak boleh memanggil endpoint approve atas nama manusia.
+| Step | Responsibility | Input | Output | Guardrail |
+|---|---|---|---|---|
+| 1. Intake | Validate order and qty | User request | MO-001, Product A, qty 500 | Don't guess unknown orders |
+| 2. Planning | Read BOM | order + BOM seed | Material requirements | Reference data, don't invent |
+| 3. Inventory | Read Stock | seed + reqs | Available/shortage | Use deterministic arithmetic |
+| 4. Purchasing | Build recommendation | shortages | Draft PR pending | No actual purchasing |
+| 5. Review | Request human confirmation | draft PR | review decision/status | Human authority required |
+| 6. Explanation | Explain tool outputs | tool results | Summary + reasoning | Don't claim failed tool activity |
+
+## Agent Guardrails (from PRD v1.1 section 3.3)
+
+- **Accuracy:** AI tidak menciptakan nilai BOM/stock; semua angka dari fungsi deterministik.
+- **Human oversight:** rekomendasi hanya draft; tidak ada PO aktual tanpa persetujuan.
+- **Transparency:** jelaskan mana data synthetic, apa yang dikerjakan WorkBuddy, script/tool, dan manual.
+- **Privacy:** tidak gunakan data pelanggan/supplier nyata atau token rahasia.
+- **Failure handling:** order invalid, stock missing, tool error → respons jujur; tidak berhalusinasi.
+- **Accountability:** ada penanggung jawab; hasil uji disimpan.
+- **Auditability:** simpan history prompt/output, hasil kalkulasi, keputusan reviewer; scrub secrets.
