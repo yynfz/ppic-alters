@@ -15,6 +15,7 @@ import { promisify } from 'node:util';
 import path from 'node:path';
 import fs from 'node:fs';
 import { fileURLToPath } from 'node:url';
+import { isDbConfigured, dataSource, materializeDataset, fetchDataset, recordPlanRun } from './db.js';
 
 const execFileAsync = promisify(execFile);
 
@@ -40,14 +41,44 @@ export async function computePlan(orderId) {
     return { ok: false, code: 'EMPTY_ORDER_ID', error: 'No production order ID was provided.' };
   }
 
+  // Supabase mode writes the rows to a temp CSV dir so the same tested Python
+  // engine computes the plan for both sources.
+  let dataDir = DATA_DIR;
+  let cleanup = null;
+
+  if (isDbConfigured()) {
+    try {
+      const dataset = await materializeDataset();
+      dataDir = dataset.dir;
+      cleanup = dataset.cleanup;
+    } catch (err) {
+      return { ok: false, code: 'DB_ERROR', error: err.message };
+    }
+  }
+
   try {
     const { stdout } = await execFileAsync(
       'python3',
-      [COMPUTE_SCRIPT, id, '--data-dir', DATA_DIR, '--json', '--no-write'],
+      [COMPUTE_SCRIPT, id, '--data-dir', dataDir, '--json', '--no-write'],
       { timeout: 15000, cwd: PROJECT_ROOT, maxBuffer: 1024 * 1024 }
     );
 
-    return { ok: true, plan: JSON.parse(stdout) };
+    const plan = JSON.parse(stdout);
+
+    // Persist the draft PR + audit trail when a database is configured.
+    // Never blocks the planner: failures are logged, not thrown.
+    if (isDbConfigured()) {
+      try {
+        const recorded = await recordPlanRun(plan);
+        if (!recorded.recorded) {
+          console.warn('[engine] plan not persisted:', recorded.reason);
+        }
+      } catch (err) {
+        console.warn('[engine] plan not persisted:', err.message);
+      }
+    }
+
+    return { ok: true, plan };
   } catch (err) {
     if (err.code === 'ENOENT') {
       return {
@@ -65,7 +96,7 @@ export async function computePlan(orderId) {
       // warnings) and must not reach the planner.
       const marker = stderr.match(/^ERROR:\s*(.+)$/m);
       if (marker) {
-        return { ok: false, code: 'PLAN_ERROR', error: marker[1].trim() };
+        return { ok: false, code: 'PLAN_ERROR', error: describeSource(marker[1].trim()) };
       }
 
       const lastLine = stderr
@@ -86,7 +117,14 @@ export async function computePlan(orderId) {
       code: 'ENGINE_FAILURE',
       error: `The deterministic engine failed: ${err.message}`,
     };
+  } finally {
+    cleanup?.();
   }
+}
+
+/** The engine says "orders.csv"; when data comes from Supabase that is wrong. */
+function describeSource(message) {
+  return isDbConfigured() ? message.replace(/orders\.csv/g, 'the database') : message;
 }
 
 function readCsv(file) {
@@ -102,19 +140,47 @@ function readCsv(file) {
     });
 }
 
-/** Read-only snapshot of the synthetic demo dataset for the UI sidebar. */
-export function demoData() {
+/** Read-only snapshot of the dataset for the UI sidebar. */
+export async function demoData() {
+  if (isDbConfigured()) {
+    try {
+      const { orders, bom, inventory } = await fetchDataset();
+      return {
+        orders,
+        bom,
+        inventory,
+        source: 'supabase',
+        note: 'All data is synthetic demo data, invented for this prototype.',
+      };
+    } catch (err) {
+      // Fall through to the CSV snapshot rather than emptying the panel.
+      console.warn('[engine] demo data from Supabase failed:', err.message);
+    }
+  }
+
   return {
     orders: readCsv('orders.csv'),
     bom: readCsv('bom.csv'),
     inventory: readCsv('inventory.csv'),
+    source: 'csv',
     note: 'All data is synthetic demo data, invented for this prototype.',
   };
 }
 
 /** Known order IDs, used to give an honest, helpful error. */
-export function knownOrderIds() {
+export async function knownOrderIds() {
+  if (isDbConfigured()) {
+    try {
+      const { orders } = await fetchDataset();
+      return orders.map((r) => r.order_id).filter(Boolean);
+    } catch (err) {
+      console.warn('[engine] order list from Supabase failed:', err.message);
+    }
+  }
+
   return readCsv('orders.csv')
     .map((r) => r.order_id)
     .filter(Boolean);
 }
+
+export { dataSource };

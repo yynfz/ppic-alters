@@ -300,7 +300,7 @@ This order cannot be produced from current stock: ${shortLines.length} of ${line
 
 async function* runOffline(message) {
   if (isGreeting(message)) {
-    const ids = knownOrderIds();
+    const ids = await knownOrderIds();
     yield {
       type: 'text',
       text: `Hello. I can check whether a production order can be built from current stock, show which materials are short, and prepare a purchase request draft for you to review.\n\nAsk me about an order — ${ids
@@ -313,7 +313,7 @@ async function* runOffline(message) {
   const orderId = orderRef(message);
 
   if (!orderId) {
-    const ids = knownOrderIds();
+    const ids = await knownOrderIds();
     yield {
       type: 'text',
       text: `Which production order should I check? I do not want to guess at an order ID.\n\nAvailable in the demo dataset: ${ids
